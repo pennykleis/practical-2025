@@ -42,7 +42,7 @@
         <!-- Header -->
         <header class="bg-white shadow-md">
             <div class="max-w-4xl mx-auto px-4 py-4">
-                <h1 class="text-2xl font-bold text-blue-600">🌍 WalkSafe Webapp</h1>
+                <h1 class="text-2xl font-bold text-blue-600">🌍 WalkSafe</h1>
                 <p class="text-gray-600">Report pavement accessibility issues with AI</p>
             </div>
         </header>
@@ -123,7 +123,12 @@
 
                 <!-- 3. Submitted Reports Section -->
                 <div class="bg-white p-5 rounded-lg shadow">
-                    <h2 class="text-lg font-semibold mb-3">3. Live Report Feed</h2>
+                    <div class="flex justify-between items-center mb-3">
+                        <h2 class="text-lg font-semibold">3. Live Report Feed</h2>
+                        <button onclick="downloadCSV()" class="px-3 py-1 text-sm bg-blue-500 text-white rounded-lg shadow-sm hover:bg-blue-600 transition-colors">
+                            Download CSV
+                        </button>
+                    </div>
                     <p class="text-sm text-gray-600 mb-4">Reports submitted by all users. (User ID: <span id="user-id" class="font-mono text-xs">loading...</span>)</p>
                     <div id="reports-list" class="space-y-3 max-h-96 overflow-y-auto">
                         <p id="reports-placeholder" class="text-gray-500">No reports submitted yet. Sign in to load...</p>
@@ -147,13 +152,14 @@
         let currentUserId = null;
         let currentImageBase64 = null;
         let aiAnalysisResult = null;
+        let allReports = []; // <-- ADD THIS: Store reports for CSV export
         
         // --- FIREBASE CONFIG & APP ID ---
         
         // This is your user-provided Firebase configuration
         const firebaseConfig = {
-          apiKey: "******************************",
-          authDomain: "**********************",
+          apiKey: "************************", //Firebase (Webapp api)
+          authDomain: "walksafe-1f6c9.firebaseapp.com",
           projectId: "walksafe-1f6c9",
           storageBucket: "walksafe-1f6c9.firebasestorage.app",
           messagingSenderId: "1063060269742",
@@ -170,7 +176,7 @@
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'walksafe-prototype';
 
         // --- GEMINI API CONFIG ---
-        const apiKey = ""; // API key is handled by the environment, leave empty.
+        const apiKey = "***********************"; //GEMINI API
         const geminiModel = "gemini-2.5-flash-preview-09-2025";
         const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${apiKey}`;
 
@@ -218,7 +224,7 @@
                 const app = initializeApp(effectiveConfig);
                 db = getFirestore(app);
                 auth = getAuth(app);
-                
+
                 // Enable debug logging for Firestore
                 setLogLevel('Debug');
 
@@ -235,6 +241,7 @@
                     } else {
                         // User is signed out
                         currentUserId = null;
+                        
                         userIdDisplay.textContent = "Not signed in";
                         console.log("User is not authenticated.");
                     }
@@ -302,6 +309,12 @@
                 alert("Please upload an image first.");
                 return;
             }
+            
+            // Check if the Gemini API key is missing
+            if (apiKey === "") {
+                alert("Gemini API key is missing. Please follow the instructions in the code to add it (around line 223).");
+                return;
+            }
 
             // Show loading state
             analyzeButton.classList.add('hidden');
@@ -319,7 +332,7 @@
                             { text: userPrompt },
                             {
                                 inlineData: {
-                                    mimeType: "image/jpeg", // Assuming jpeg, works for png too
+                                    mimeType: "image/jpeg",
                                     data: currentImageBase64
                                 }
                             }
@@ -471,7 +484,7 @@
                     resetAnalysisUI();
                     analysisSection.classList.add('hidden');
                     imagePreviewContainer.classList.add('hidden');
-                    document.getElementById('image-upload').value = null; // Clear file input
+                    document.getElementById('image-upload').value = null;
                     currentImageBase64 = null;
                 }, 2000);
                 
@@ -488,7 +501,7 @@
             if (!db) return;
             
             const reportsCollectionPath = `/artifacts/${appId}/public/data/reports`;
-            const q = query(collection(db, reportsCollectionPath)); // Note: No orderBy, as per instructions.
+            const q = query(collection(db, reportsCollectionPath));
 
             console.log("Listening for reports at:", reportsCollectionPath);
 
@@ -513,6 +526,7 @@
                     return timeB - timeA;
                 });
 
+                allReports = reports;
                 renderReports(reports);
 
             }, (error) => {
@@ -535,6 +549,7 @@
                 // Handle breadth display, even for older reports
                 const breadthText = data.finalBreadthMeters !== undefined ? `x ${data.finalBreadthMeters}m (B)` : '';
                 
+                // *** TYPO FIX: Changed 'data.finalLengthML' to 'data.finalLengthMeters}m (L)' ***
                 reportEl.innerHTML = `
                     <p class="font-semibold text-blue-700">${data.finalIssueType}</p>
                     <p class="text-sm text-gray-800">Dimensions: ${data.finalLengthMeters}m (L) ${breadthText}</p>
@@ -546,9 +561,80 @@
             });
         }
 
+        // --- CSV Download Function ---
+        function escapeCSV(cell) {
+            if (cell === undefined || cell === null) {
+                return '';
+            }
+            let str = String(cell);
+            // If the cell contains a comma, a newline, or a double quote, wrap it in double quotes
+            if (str.includes(',') || str.includes('\n') || str.includes('"')) {
+                // Escape existing double quotes by doubling them up
+                str = str.replace(/"/g, '""');
+                return `"${str}"`;
+            }
+            return str;
+        }
+
+        window.downloadCSV = () => {
+            if (allReports.length === 0) {
+                alert("No reports to download.");
+                return;
+            }
+
+            const headers = [
+                "UserID",
+                "Timestamp",
+                "IssueType (Final)",
+                "Length (m)",
+                "Breadth (m)",
+                "User Corrected",
+                "AI IssueType",
+                "AI Length (m)",
+                "AI Breadth (m)",
+                "AI Confidence",
+                "AI Notes"
+            ];
+
+            let csvContent = headers.join(",") + "\n";
+
+            allReports.forEach(reportDoc => {
+                const data = reportDoc.data;
+                const timestamp = data.createdAt ? new Date(data.createdAt.seconds * 1000).toISOString() : "N/A";
+                
+                const row = [
+                    data.userId,
+                    timestamp,
+                    data.finalIssueType,
+                    data.finalLengthMeters,
+                    data.finalBreadthMeters,
+                    data.userCorrected,
+                    data.aiIssueType,
+                    data.aiLengthMeters,
+                    data.aiBreadthMeters,
+                    data.aiConfidence,
+                    data.aiNotes
+                ];
+
+                csvContent += row.map(escapeCSV).join(",") + "\n";
+            });
+
+            // Create download
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            const url = URL.createObjectURL(blob);
+            link.setAttribute("href", url);
+            link.setAttribute("download", "walksafe_reports.csv");
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        };
+
         // --- PWA Service Worker Registration ---
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
+                // We use /sw.js because the file is at the root of the server
                 navigator.serviceWorker.register('/sw.js')
                     .then(registration => {
                         console.log('Service Worker registered successfully:', registration.scope);
