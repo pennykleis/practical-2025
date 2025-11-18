@@ -1,0 +1,24 @@
+{
+  "name": "WalkSafe Pavement Analyzer",
+  "short_name": "WalkSafe",
+  "description": "Report pavement accessibility issues with AI.",
+  "start_url": "/walksafe_app.html",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#3b82f6",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "https://placehold.co/192x192/3b82f6/ffffff?text=WS",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://placehold.co/512x512/3b82f6/ffffff?text=WalkSafe",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ]
+}
