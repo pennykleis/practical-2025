@@ -321,11 +321,6 @@
 
     const appId = typeof __app_id !== "undefined" ? __app_id : "walksafe-prototype";
 
-    // --- GROQ VISION CONFIG ---
-    const GROQ_API_KEY = "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"; 
-    const GROQ_BASE_URL = "https://api.groq.com/openai/v1/chat/completions";
-    const GROQ_VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct";
-
     // --- DOM REFS ---
     const cameraInput = document.getElementById("camera-input");
     const galleryInput = document.getElementById("gallery-input");
@@ -673,131 +668,66 @@
         });
     }
 
-    // --- GROQ ANALYSIS ---
-    async function fetchWithRetry(url, options, retries = 3, delay = 1000) {
-        for (let i = 0; i < retries; i++) {
-            try {
-                const res = await fetch(url, options);
-                if (res.ok) return res;
-                if (res.status === 429 || res.status >= 500) {
-                    await new Promise((r) => setTimeout(r, delay * Math.pow(2, i)));
-                } else {
-                    return res;
-                }
-            } catch (e) {
-                await new Promise((r) => setTimeout(r, delay * Math.pow(2, i)));
-            }
-        }
-        return fetch(url, options);
+// --- GROQ ANALYSIS VIA BACKEND ---
+window.analyzeImage = async () => {
+    if (!currentImageBase64) {
+        alert("Please upload an image first.");
+        return;
     }
 
-    window.analyzeImage = async () => {
-        if (!currentImageBase64) {
-            alert("Please upload an image first.");
-            return;
+    // UI state
+    analyzeButton.classList.add("hidden");
+    loadingContainer.classList.remove("hidden");
+    resultsForm.classList.add("hidden");
+    submitStatus.classList.add("hidden");
+    resetManualBoxes();
+
+    // make sure map resizes nicely
+    setTimeout(() => {
+        if (submissionMap) submissionMap.invalidateSize();
+    }, 100);
+
+    try {
+        // ✅ Call Flask backend instead of Groq directly
+        const res = await fetch("/api/analyze-image", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                image_base64: currentImageBase64
+            })
+        });
+
+        if (!res.ok) {
+            const text = await res.text();
+            throw new Error(`Server error: ${res.status} – ${text}`);
         }
-        if (!GROQ_API_KEY) {
-            alert("Missing Groq API key. Add it in the source before testing.");
-            return;
-        }
 
-        analyzeButton.classList.add("hidden");
-        loadingContainer.classList.remove("hidden");
-        resultsForm.classList.add("hidden");
-        submitStatus.classList.add("hidden");
-        resetManualBoxes();
+        // Backend returns the JSON with issueType, faceBoxes, etc.
+        const data = await res.json();
+        aiAnalysisResult = data;
 
-        setTimeout(() => {
-            if (submissionMap) submissionMap.invalidateSize();
-        }, 100);
-
-        const systemPrompt = `
-You are a pavement accessibility expert AND privacy assistant.
-
-Return exactly ONE JSON object with the following fields:
-- issueType: short description of the main pavement issue (string).
-- estimatedLengthMeters: number (0 if unclear).
-- estimatedBreadthMeters: number (0 if unclear).
-- imageTimestamp: string timestamp if visible in the image, otherwise "null".
-- confidenceScore: number from 0.0 to 1.0.
-- analysisNotes: brief explanation (string).
-- faceBoxes: array of bounding boxes ONLY for human faces.
-  Each box is an object { "ymin": number, "xmin": number, "ymax": number, "xmax": number }
-  with ALL coordinates NORMALIZED to the range [0,1] relative to image height/width.
-
-IMPORTANT:
-- Do NOT include license plates in faceBoxes.
-- Do NOT mention GPS, plates, or other privacy-sensitive text, only return faceBoxes for human faces.
-`.trim();
-
-        const userPrompt = `
-Analyze this pavement photo.
-
-1) Describe any accessibility issues (e.g. cracks, obstacles, blocked ramps) and give rough length and breadth in meters.
-2) If any timestamp is printed in the image (e.g. camera overlay), extract it as a string.
-3) Detect ALL HUMAN FACES and return tight bounding boxes around the faces as "faceBoxes" (normalized 0-1).
-`.trim();
-
-        const payload = {
-            model: GROQ_VISION_MODEL,
-            response_format: { type: "json_object" },
-            messages: [
-                { role: "system", content: systemPrompt },
-                {
-                    role: "user",
-                    content: [
-                        { type: "text", text: userPrompt },
-                        {
-                            type: "image_url",
-                            image_url: { url: "data:image/jpeg;base64," + currentImageBase64 }
-                        }
-                    ]
-                }
-            ]
-        };
-
-        try {
-            const response = await fetchWithRetry(GROQ_BASE_URL, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    Authorization: "Bearer " + GROQ_API_KEY
-                },
-                body: JSON.stringify(payload)
-            });
-
-            if (!response.ok) {
-                const text = await response.text();
-                throw new Error(`API Error: ${response.status} – ${text}`);
+        // auto-redact faces if any
+        if (aiAnalysisResult.faceBoxes && aiAnalysisResult.faceBoxes.length > 0) {
+            const redactedUrl = await redactSensitiveData(aiAnalysisResult.faceBoxes);
+            if (redactedUrl) {
+                currentImageBase64 = redactedUrl.split(",")[1];
+                imagePreview.src = redactedUrl;
+                privacyBadge.classList.remove("hidden");
+                privacyBadge.textContent =
+                    `🛡️ Faces redacted automatically (${aiAnalysisResult.faceBoxes.length} face(s)).` +
+                    " Use manual boxes for plates.";
             }
-
-            const result = await response.json();
-            const textContent = result.choices?.[0]?.message?.content;
-            if (!textContent) throw new Error("Invalid API response format.");
-            aiAnalysisResult = JSON.parse(textContent);
-
-            // auto-redact faces if any
-            if (aiAnalysisResult.faceBoxes && aiAnalysisResult.faceBoxes.length > 0) {
-                const redactedUrl = await redactSensitiveData(aiAnalysisResult.faceBoxes);
-                if (redactedUrl) {
-                    currentImageBase64 = redactedUrl.split(",")[1];
-                    imagePreview.src = redactedUrl;
-                    privacyBadge.classList.remove("hidden");
-                    privacyBadge.textContent =
-                        `🛡️ Faces redacted automatically (${aiAnalysisResult.faceBoxes.length} face(s)).` +
-                        " Use manual boxes for plates.";
-                }
-            }
-
-            displayAnalysisResults(aiAnalysisResult);
-        } catch (error) {
-            console.error("AI Error:", error);
-            alert(`Analysis failed: ${error.message}`);
-            analyzeButton.classList.remove("hidden");
-        } finally {
-            loadingContainer.classList.add("hidden");
         }
-    };
+
+        displayAnalysisResults(aiAnalysisResult);
+    } catch (error) {
+        console.error("Analysis Error:", error);
+        alert(`Analysis failed: ${error.message}`);
+        analyzeButton.classList.remove("hidden");
+    } finally {
+        loadingContainer.classList.add("hidden");
+    }
+};
 
     function displayAnalysisResults(data) {
         aiNotes.textContent = data.analysisNotes || "No notes.";
@@ -1093,3 +1023,4 @@ Analyze this pavement photo.
 </script>
 </body>
 </html>
+
